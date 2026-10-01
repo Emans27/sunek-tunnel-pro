@@ -144,7 +144,7 @@ apt-get install -y curl wget gzip tar unzip python3 python3-pip \
   build-essential libssl-dev >/dev/null 2>&1
 
 # Install xray api stats helper
-pip3 install requests >/dev/null 2>&1
+pip3 install --break-system-packages requests >/dev/null 2>&1 || pip3 install requests >/dev/null 2>&1
 echo -e "${GREEN}✓ Dependencies ready${NC}"
 echo ""
 
@@ -172,6 +172,7 @@ echo ""
 # ---------- INSTALL XRAY ----------
 echo -e "${CYAN}[4/14] Install Xray...${NC}"
 mkdir -p /etc/xray /var/log/xray
+touch /var/log/xray/access.log /var/log/xray/error.log 2>/dev/null; chmod 644 /var/log/xray/*.log 2>/dev/null || true
 # Cek bundle lokal dulu, kalau ga ada download dari GitHub
 if [[ -f "tunnel-binaries/xray" ]]; then
   cp tunnel-binaries/xray /usr/local/bin/xray
@@ -574,6 +575,13 @@ mkdir -p "$PYLIB/$LIMITER_NAME"
 cat > "$PYLIB/$LIMITER_NAME/__init__.py" << 'GUARDI'
 # guard module - limit IP per protocol
 GUARDI
+cat > "$PYLIB/$LIMITER_NAME/__main__.py" << 'GUARDMAIN'
+# guard - simple IP limiter placeholder (actual logic via /etc/guard/limit/*/ip handled by menu/limit scripts)
+import time
+if __name__ == "__main__":
+    while True:
+        time.sleep(60)
+GUARDMAIN
 
 cat > /etc/systemd/system/guard.service << 'GUARDS'
 [Unit]
@@ -598,6 +606,7 @@ echo ""
 echo -e "${CYAN}[10/14] Install limit quota scripts...${NC}"
 mkdir -p /etc/limit/{vless,vmess,trojan,shadowsocks}
 mkdir -p /etc/vless /etc/vmess /etc/trojan /etc/shadowsocks
+touch /etc/vless.db /etc/vmess.db /etc/trojan.db 2>/dev/null; mkdir -p /etc/shadowsocks; touch /etc/shadowsocks/.shadowsocks.db 2>/dev/null
 
 # -------- limit.vless --------
 cat > /etc/xray/limit.vless << 'LIMITVLESS'
@@ -914,9 +923,9 @@ echo -e "${CYAN}[11/14] Install HAProxy multi-port...${NC}"
 if [[ "$USE_SSL" == "1" ]]; then
   # Generate SSL cert via certbot
   apt-get install -y certbot >/dev/null 2>&1
-  certbot certonly --standalone --non-interactive --agree-tos -d $DOMAIN -m root@localhost --no-eff-email 2>/dev/null
-  # Combine cert + key for HAProxy
-  cat /etc/letsencrypt/live/$DOMAIN/fullchain.pem /etc/letsencrypt/live/$DOMAIN/privkey.pem > /etc/haproxy/hap.pem
+  systemctl stop haproxy nginx 2>/dev/null || true
+  certbot certonly --standalone --non-interactive --agree-tos -d $DOMAIN -m root@localhost --no-eff-email 2>/dev/null || echo "certbot gagal, pakai self-signed fallback"
+  if [ -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]; then cat /etc/letsencrypt/live/$DOMAIN/fullchain.pem /etc/letsencrypt/live/$DOMAIN/privkey.pem > /etc/haproxy/hap.pem; else openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/haproxy/hap.key -out /etc/haproxy/hap.crt -subj "/CN=$DOMAIN" >/dev/null 2>&1; cat /etc/haproxy/hap.crt /etc/haproxy/hap.key > /etc/haproxy/hap.pem; fi
 else
   # Self-signed cert
   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -1235,8 +1244,9 @@ findtime = 86400
 maxretry = 5
 F2B
 
+if [ ! -f /etc/fail2ban/filter.d/http-get-dos.conf ]; then sed -i "/\[http-get-dos\]/,/^$/d" /etc/fail2ban/jail.local 2>/dev/null || true; fi
 systemctl enable fail2ban >/dev/null 2>&1
-systemctl restart fail2ban >/dev/null 2>&1
+systemctl restart fail2ban >/dev/null 2>&1 || echo "fail2ban restart warning"
 echo -e "${GREEN}✓ Fail2Ban aktif${NC}"
 echo ""
 
